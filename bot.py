@@ -1,103 +1,78 @@
 import os
-import logging
-import json
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
+import telebot
+from telebot import types
 
-# 1. НАСТРОЙКИ (Берем из переменных Railway)
-# Если переменные не заданы в Railway, бот выдаст ошибку в логах
-TOKEN = os.getenv("TOKEN")
-ALLOWED_USERS = os.getenv("ALLOWED_USERS", "").split(",")
+# Считываем настройки из Railway
+TOKEN = os.getenv('TOKEN')
+ALLOWED_USERS = [int(x.strip()) for x in os.getenv('ALLOWED_USERS', '').split(',') if x.strip()]
 
-logging.basicConfig(level=logging.INFO)
+bot = telebot.TeleBot(TOKEN)
 
-FILE = "shopping.json"
+# Временное хранилище (в идеале тут должна быть БД, но для начала хватит и этого)
+# Формат: {'название': {'bought': False}}
+shopping_list = {}
 
-def load_data():
-    try:
-        with open(FILE, "r") as f:
-            return json.load(f)
-    except:
-        return {}
+def check_access(message):
+    return message.from_user.id in ALLOWED_USERS
 
-def save_data(data_to_save):
-    with open(FILE, "w") as f:
-        json.dump(data_to_save, f, ensure_ascii=False, indent=2)
-
-data = load_data()
-
-main_keyboard = ReplyKeyboardMarkup([
-    ["➕ Добавить продукты"],
-    ["📋 Список"],
-    ["🧹 Очистить всё"]
-], resize_keyboard=True)
-
-def build_list_ui(chat_id):
-    items = data.get(str(chat_id), [])
-    if not items:
-        return "🛒 Список пуст", None
-    
-    text = "📋 **ВАШ СПИСОК:**"
-    keyboard = []
-    
-    for i, item in enumerate(items):
-        status = "✅ " if item["done"] else "❌ "
-        keyboard.append([InlineKeyboardButton(f"{status} {item['name']}", callback_id=f"tgl_{i}")])
-    
-    admin_row = []
-    if any(not i["done"] for i in items):
-        admin_row.append(InlineKeyboardButton("✔️ Отметить всё", callback_data="mark_done"))
-    
-    admin_row.append(InlineKeyboardButton("🗑️ Правка списка", callback_data="edit_list"))
-    
-    keyboard.append(admin_row)
-    return text, InlineKeyboardMarkup(keyboard)
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = str(update.effective_user.id)
-    if user_id not in ALLOWED_USERS:
-        await update.message.reply_text(f"Доступ запрещен. Ваш ID: {user_id}")
+@bot.message_handler(commands=['start'])
+def start(message):
+    if not check_access(message):
+        bot.send_message(message.chat.id, f"Доступ запрещен. Ваш ID: {message.from_user.id}")
         return
-    await update.message.reply_text("Бот готов к работе!", reply_markup=main_keyboard)
+    
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.add("🍎 Показать список", "➕ Добавить продукт")
+    markup.add("🗑 Очистить купленное")
+    bot.send_message(message.chat.id, "Бот готов к работе! Пользуйся меню ниже:", reply_markup=markup)
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = str(update.effective_user.id)
-    if user_id not in ALLOWED_USERS:
+@bot.message_handler(func=lambda m: m.text == "🍎 Показать список")
+def show_list(message):
+    if not check_access(message): return
+    if not shopping_list:
+        bot.send_message(message.chat.id, "Список пока пуст.")
         return
 
-    chat_id = str(update.effective_chat.id)
-    text = update.message.text
+    text = "📝 **Ваш список продуктов:**\n\n"
+    keyboard = types.InlineKeyboardMarkup()
+    
+    for item, data in shopping_list.items():
+        status = "✅" if data['bought'] else "🛒"
+        text += f"{status} {item}\n"
+        # Кнопка для переключения статуса
+        btn_text = f"{'Вернуть' if data['bought'] else 'Куплено'}: {item}"
+        keyboard.add(types.InlineKeyboardButton(text=btn_text, callback_query_id=f"toggle_{item}"))
 
-    if text == "➕ Добавить продукты":
-        await update.message.reply_text("Введите список продуктов (каждый с новой строки):")
-        context.user_data["state"] = "adding"
-        return
+    bot.send_message(message.chat.id, text, reply_markup=keyboard, parse_mode="Markdown")
 
-    if text == "📋 Список":
-        msg_text, kb = build_list_ui(chat_id)
-        await update.message.reply_text(msg_text, reply_markup=kb, parse_mode="Markdown")
-        return
+@bot.callback_query_handler(func=lambda call: call.data.startswith("toggle_"))
+def toggle_item(call):
+    item = call.data.replace("toggle_", "")
+    if item in shopping_list:
+        shopping_list[item]['bought'] = not shopping_list[item]['bought']
+        # Обновляем сообщение со списком
+        show_list(call.message)
+        bot.answer_callback_query(call.id, f"Статус {item} изменен")
 
-    if text == "🧹 Очистить всё":
-        data[chat_id] = []
-        save_data(data)
-        await update.message.reply_text("Список очищен!", reply_markup=main_keyboard)
-        return
+@bot.message_handler(func=lambda m: m.text == "➕ Добавить продукт")
+def add_prompt(message):
+    if not check_access(message): return
+    msg = bot.send_message(message.chat.id, "Напишите название продукта (или список через запятую):")
+    bot.register_next_step_handler(msg, process_adding)
 
-    if context.user_data.get("state") == "adding":
-        new_items = [{"name": x.strip(), "done": False} for x in text.split("\n") if x.strip()]
-        if chat_id not in data: data[chat_id] = []
-        data[chat_id].extend(new_items)
-        save_data(data)
-        context.user_data["state"] = None
-        await update.message.reply_text(f"Добавлено {len(new_items)} поз.", reply_markup=main_keyboard)
+def process_adding(message):
+    items = [i.strip() for i in message.text.split(',')]
+    for item in items:
+        if item:
+            shopping_list[item] = {'bought': False}
+    bot.send_message(message.chat.id, f"Добавлено: {', '.join(items)}")
+    show_list(message)
 
-if __name__ == '__main__':
-    if not TOKEN:
-        print("ОШИБКА: TOKEN не найден в переменных окружения!")
-    else:
-        app = ApplicationBuilder().token(TOKEN).build()
-        app.add_handler(CommandHandler("start", start))
-        app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
-        print("Бот успешно запущен...")
-        app.run_polling()
+@bot.message_handler(func=lambda m: m.text == "🗑 Очистить купленное")
+def clear_bought(message):
+    global shopping_list
+    shopping_list = {k: v for k, v in shopping_list.items() if not v['bought']}
+    bot.send_message(message.chat.id, "Купленные товары удалены из списка.")
+    show_list(message)
+
+bot.polling(none_stop=True)

@@ -7,7 +7,11 @@ raw_users = os.getenv('ALLOWED_USERS', '')
 ALLOWED_USERS = [int(x.strip()) for x in raw_users.split(',') if x.strip()]
 
 bot = telebot.TeleBot(TOKEN)
+
+# Данные пользователя (в памяти)
 shopping_list = {}
+# Храним ID последнего сообщения со списком, чтобы его удалить
+last_list_msg_id = {}
 
 @bot.message_handler(commands=['start'])
 def start(message):
@@ -17,12 +21,18 @@ def start(message):
     
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add("📋 Список", "➕ Добавить")
-    bot.send_message(message.chat.id, "Бот готов!", reply_markup=markup)
+    bot.send_message(message.chat.id, "Бот готов! Используйте меню:", reply_markup=markup)
+
+def delete_old_menu(chat_id):
+    """Удаляет предыдущее сообщение со списком, если оно существует"""
+    if chat_id in last_list_msg_id:
+        try:
+            bot.delete_message(chat_id, last_list_msg_id[chat_id])
+        except:
+            pass # Если сообщение уже удалено вручную или устарело
 
 def get_keyboard(edit_mode=False):
-    """Генерирует кнопки списка."""
     markup = types.InlineKeyboardMarkup()
-    
     if not shopping_list:
         if edit_mode:
             markup.add(types.InlineKeyboardButton(text="➕ Добавить продукт", callback_data="add_from_edit"))
@@ -43,19 +53,20 @@ def get_keyboard(edit_mode=False):
         markup.add(types.InlineKeyboardButton(text="⬅️ Назад", callback_data="view_mode"))
     else:
         markup.add(types.InlineKeyboardButton(text="✍️ Редактировать список", callback_data="edit_mode"))
-        
     return markup
 
 @bot.message_handler(func=lambda m: m.text == "📋 Список")
 def show_list(message):
+    delete_old_menu(message.chat.id)
     kb = get_keyboard()
     if kb:
-        bot.send_message(message.chat.id, "Ваш список покупок:", reply_markup=kb)
+        sent_msg = bot.send_message(message.chat.id, "Ваш список покупок:", reply_markup=kb)
+        last_list_msg_id[message.chat.id] = sent_msg.message_id
     else:
-        # Если список пуст, даем возможность сразу добавить из этого окна
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton(text="➕ Добавить продукт", callback_data="add_from_edit"))
-        bot.send_message(message.chat.id, "Список пока пуст.", reply_markup=markup)
+        sent_msg = bot.send_message(message.chat.id, "Список пока пуст.", reply_markup=markup)
+        last_list_msg_id[message.chat.id] = sent_msg.message_id
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callbacks(call):
@@ -68,14 +79,10 @@ def handle_callbacks(call):
         bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=get_keyboard())
     
     elif call.data == "edit_mode":
-        bot.edit_message_text("🛠 Режим редактирования:", 
-                             call.message.chat.id, call.message.message_id, 
-                             reply_markup=get_keyboard(edit_mode=True))
+        bot.edit_message_text("🛠 Режим редактирования:", call.message.chat.id, call.message.message_id, reply_markup=get_keyboard(edit_mode=True))
                              
     elif call.data == "view_mode":
-        bot.edit_message_text("Ваш список покупок:", 
-                             call.message.chat.id, call.message.message_id, 
-                             reply_markup=get_keyboard(edit_mode=False))
+        bot.edit_message_text("Ваш список покупок:", call.message.chat.id, call.message.message_id, reply_markup=get_keyboard(edit_mode=False))
 
     elif call.data == "add_from_edit":
         bot.answer_callback_query(call.id)
@@ -103,13 +110,17 @@ def ask_add(message):
     bot.register_next_step_handler(msg, process_adding)
 
 def process_adding(message):
+    # Удаляем старое меню перед выводом нового после добавления
+    delete_old_menu(message.chat.id)
+    
     raw_text = message.text.replace('\n', ',')
     items = [i.strip() for i in raw_text.split(',') if i.strip()]
     for i in items:
         if i not in shopping_list:
             shopping_list[i] = False
     
-    bot.send_message(message.chat.id, "Добавлено! Вот актуальный список:", reply_markup=get_keyboard())
+    sent_msg = bot.send_message(message.chat.id, "Список обновлен:", reply_markup=get_keyboard())
+    last_list_msg_id[message.chat.id] = sent_msg.message_id
 
 if __name__ == "__main__":
     bot.polling(none_stop=True)

@@ -8,10 +8,11 @@ ALLOWED_USERS = [int(x.strip()) for x in raw_users.split(',') if x.strip()]
 
 bot = telebot.TeleBot(TOKEN)
 
-# Данные пользователя (в памяти)
+# Данные в памяти
 shopping_list = {}
-# Храним ID последнего сообщения со списком
+# Храним ID последнего сообщения со списком и сообщения-вопроса
 last_list_msg_id = {}
+last_ask_msg_id = {}
 
 @bot.message_handler(commands=['start'])
 def start(message):
@@ -21,26 +22,25 @@ def start(message):
     
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add("📋 Список", "➕ Добавить")
-    bot.send_message(message.chat.id, "Бот готов! Используйте меню:", reply_markup=markup)
+    bot.send_message(message.chat.id, "Бот готов к работе!", reply_markup=markup)
 
 def delete_message_safe(chat_id, msg_id):
-    """Вспомогательная функция для удаления сообщений без ошибок"""
     try:
         bot.delete_message(chat_id, msg_id)
     except:
         pass
 
 def delete_old_menu(chat_id):
-    """Удаляет предыдущее сообщение со списком"""
     if chat_id in last_list_msg_id:
         delete_message_safe(chat_id, last_list_msg_id[chat_id])
 
 def get_keyboard(edit_mode=False):
     markup = types.InlineKeyboardMarkup()
+    
     if not shopping_list:
         if edit_mode:
             markup.add(types.InlineKeyboardButton(text="➕ Добавить продукт", callback_data="add_from_edit"))
-            markup.add(types.InlineKeyboardButton(text="⬅️ Назад", callback_data="view_mode"))
+            markup.add(types.InlineKeyboardButton(text="✅ Сохранить", callback_data="view_mode"))
             return markup
         return None
 
@@ -54,14 +54,13 @@ def get_keyboard(edit_mode=False):
     if edit_mode:
         markup.add(types.InlineKeyboardButton(text="➕ Добавить продукт", callback_data="add_from_edit"))
         markup.add(types.InlineKeyboardButton(text="🗑 Очистить всё", callback_data="clear_all"))
-        markup.add(types.InlineKeyboardButton(text="⬅️ Назад", callback_data="view_mode"))
+        markup.add(types.InlineKeyboardButton(text="✅ Сохранить", callback_data="view_mode"))
     else:
-        markup.add(types.InlineKeyboardButton(text="✍️ Редактировать список", callback_data="edit_mode"))
+        markup.add(types.InlineKeyboardButton(text="✍️ Редактировать", callback_data="edit_mode"))
     return markup
 
 @bot.message_handler(func=lambda m: m.text == "📋 Список")
 def show_list(message):
-    # Удаляем само сообщение пользователя "Список" для чистоты
     delete_message_safe(message.chat.id, message.message_id)
     delete_old_menu(message.chat.id)
     
@@ -113,18 +112,20 @@ def handle_callbacks(call):
 
 @bot.message_handler(func=lambda m: m.text == "➕ Добавить")
 def ask_add(message):
-    # Удаляем сообщение пользователя "Добавить"
     delete_message_safe(message.chat.id, message.message_id)
     msg = bot.send_message(message.chat.id, "Что добавить? (введите текст):")
+    last_ask_msg_id[message.chat.id] = msg.message_id
     bot.register_next_step_handler(msg, process_adding)
 
 def process_adding(message):
-    # Удаляем сообщение-инструкцию бота ("Что добавить?")
-    # Мы не знаем его ID напрямую здесь просто так, но можем удалить через message.reply_to_message или запомнить его
-    # Но самый важный пункт: удаляем ТВОЙ ВВОД (продукты)
+    # Удаляем ввод пользователя
     delete_message_safe(message.chat.id, message.message_id)
     
-    # Удаляем старое меню
+    # Удаляем вопрос бота "Что добавить?"
+    if message.chat.id in last_ask_msg_id:
+        delete_message_safe(message.chat.id, last_ask_msg_id[message.chat.id])
+    
+    # Обновляем старое меню
     delete_old_menu(message.chat.id)
     
     raw_text = message.text.replace('\n', ',')
@@ -135,5 +136,3 @@ def process_adding(message):
     
     sent_msg = bot.send_message(message.chat.id, "Список обновлен:", reply_markup=get_keyboard())
     last_list_msg_id[message.chat.id] = sent_msg.message_id
-if __name__ == "__main__":
-    bot.polling(none_stop=True)

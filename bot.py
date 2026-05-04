@@ -10,7 +10,7 @@ bot = telebot.TeleBot(TOKEN)
 
 # Данные пользователя (в памяти)
 shopping_list = {}
-# Храним ID последнего сообщения со списком, чтобы его удалить
+# Храним ID последнего сообщения со списком
 last_list_msg_id = {}
 
 @bot.message_handler(commands=['start'])
@@ -23,13 +23,17 @@ def start(message):
     markup.add("📋 Список", "➕ Добавить")
     bot.send_message(message.chat.id, "Бот готов! Используйте меню:", reply_markup=markup)
 
+def delete_message_safe(chat_id, msg_id):
+    """Вспомогательная функция для удаления сообщений без ошибок"""
+    try:
+        bot.delete_message(chat_id, msg_id)
+    except:
+        pass
+
 def delete_old_menu(chat_id):
-    """Удаляет предыдущее сообщение со списком, если оно существует"""
+    """Удаляет предыдущее сообщение со списком"""
     if chat_id in last_list_msg_id:
-        try:
-            bot.delete_message(chat_id, last_list_msg_id[chat_id])
-        except:
-            pass # Если сообщение уже удалено вручную или устарело
+        delete_message_safe(chat_id, last_list_msg_id[chat_id])
 
 def get_keyboard(edit_mode=False):
     markup = types.InlineKeyboardMarkup()
@@ -57,7 +61,10 @@ def get_keyboard(edit_mode=False):
 
 @bot.message_handler(func=lambda m: m.text == "📋 Список")
 def show_list(message):
+    # Удаляем само сообщение пользователя "Список" для чистоты
+    delete_message_safe(message.chat.id, message.message_id)
     delete_old_menu(message.chat.id)
+    
     kb = get_keyboard()
     if kb:
         sent_msg = bot.send_message(message.chat.id, "Ваш список покупок:", reply_markup=kb)
@@ -106,11 +113,18 @@ def handle_callbacks(call):
 
 @bot.message_handler(func=lambda m: m.text == "➕ Добавить")
 def ask_add(message):
-    msg = bot.send_message(message.chat.id, "Что добавить? (можно через запятую или списком):")
+    # Удаляем сообщение пользователя "Добавить"
+    delete_message_safe(message.chat.id, message.message_id)
+    msg = bot.send_message(message.chat.id, "Что добавить? (введите текст):")
     bot.register_next_step_handler(msg, process_adding)
 
 def process_adding(message):
-    # Удаляем старое меню перед выводом нового после добавления
+    # Удаляем сообщение-инструкцию бота ("Что добавить?")
+    # Мы не знаем его ID напрямую здесь просто так, но можем удалить через message.reply_to_message или запомнить его
+    # Но самый важный пункт: удаляем ТВОЙ ВВОД (продукты)
+    delete_message_safe(message.chat.id, message.message_id)
+    
+    # Удаляем старое меню
     delete_old_menu(message.chat.id)
     
     raw_text = message.text.replace('\n', ',')
@@ -121,6 +135,5 @@ def process_adding(message):
     
     sent_msg = bot.send_message(message.chat.id, "Список обновлен:", reply_markup=get_keyboard())
     last_list_msg_id[message.chat.id] = sent_msg.message_id
-
 if __name__ == "__main__":
     bot.polling(none_stop=True)

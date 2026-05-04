@@ -32,7 +32,7 @@ def get_keyboard():
         icon = "✅" if bought else "🛒"
         markup.add(types.InlineKeyboardButton(text=f"{icon} {item}", callback_data=f"tgl_{item}"))
     
-    markup.add(types.InlineKeyboardButton(text="✍️ Редактировать текст списка", callback_data="edit_text_mode"))
+    markup.add(types.InlineKeyboardButton(text="✍️ Редактировать", callback_data="edit_text_mode"))
     return markup
 
 @bot.message_handler(commands=['start'])

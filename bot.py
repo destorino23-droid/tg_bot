@@ -48,11 +48,10 @@ def get_keyboard(edit_mode=False):
 
 @bot.message_handler(commands=['start'])
 def start(message):
-    if message.from_user.id not in ALLOWED_USERS:
-        return
+    if message.from_user.id not in ALLOWED_USERS: return
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add("📋 Список", "➕ Добавить")
-    bot.send_message(message.chat.id, "Бот запущен!", reply_markup=markup)
+    bot.send_message(message.chat.id, "Бот готов!", reply_markup=markup)
 
 @bot.message_handler(func=lambda m: m.text == "📋 Список")
 def show_list(message):
@@ -85,13 +84,18 @@ def handle_callbacks(call):
         bot.edit_message_text("Ваш список покупок:", call.message.chat.id, call.message.message_id, reply_markup=get_keyboard(edit_mode=False))
 
     elif call.data == "add_from_edit":
+        # Важно: Сначала отвечаем на колбэк, потом вызываем функцию
         bot.answer_callback_query(call.id)
         ask_add(call.message)
 
     elif call.data.startswith("del_"):
         item = call.data.replace("del_", "")
         shopping_list.pop(item, None)
-        bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=get_keyboard(edit_mode=True))
+        kb = get_keyboard(edit_mode=True)
+        if kb:
+            bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=kb)
+        else:
+            bot.edit_message_text("Список пуст.", call.message.chat.id, call.message.message_id, reply_markup=get_keyboard(edit_mode=True))
 
     elif call.data == "clear_all":
         shopping_list = {}
@@ -102,17 +106,24 @@ def handle_callbacks(call):
 @bot.message_handler(func=lambda m: m.text == "➕ Добавить")
 def ask_add(message):
     if message.from_user.id not in ALLOWED_USERS: return
-    delete_message_safe(message.chat.id, message.message_id)
+    # Если это текстовая кнопка "Добавить", удаляем её
+    if message.text == "➕ Добавить":
+        delete_message_safe(message.chat.id, message.message_id)
+    
+    # Удаляем старое меню, чтобы не дублировать
+    delete_old_menu(message.chat.id)
+    
     msg = bot.send_message(message.chat.id, "Что добавить? (введите текст):")
     last_ask_msg_id[message.chat.id] = msg.message_id
     bot.register_next_step_handler(msg, process_adding)
 
 def process_adding(message):
+    # Удаляем то, что написал пользователь
     delete_message_safe(message.chat.id, message.message_id)
+    
+    # Удаляем вопрос бота
     if message.chat.id in last_ask_msg_id:
         delete_message_safe(message.chat.id, last_ask_msg_id[message.chat.id])
-    
-    delete_old_menu(message.chat.id)
     
     if message.text:
         raw_text = message.text.replace('\n', ',')
@@ -121,12 +132,10 @@ def process_adding(message):
             if i not in shopping_list:
                 shopping_list[i] = False
     
+    # Показываем обновленный список
     kb = get_keyboard()
     sent_msg = bot.send_message(message.chat.id, "Список обновлен:", reply_markup=kb)
     last_list_msg_id[message.chat.id] = sent_msg.message_id
 
 if __name__ == "__main__":
     bot.polling(none_stop=True)
-    
-    sent_msg = bot.send_message(message.chat.id, "Список обновлен:", reply_markup=get_keyboard())
-    last_list_msg_id[message.chat.id] = sent_msg.message_id

@@ -8,9 +8,9 @@ ALLOWED_USERS = [int(x.strip()) for x in raw_users.split(',') if x.strip()]
 
 bot = telebot.TeleBot(TOKEN)
 
+# Данные в памяти
 shopping_list = {}
 last_list_msg_id = {}
-last_ask_msg_id = {}
 
 def delete_message_safe(chat_id, msg_id):
     try:
@@ -22,28 +22,17 @@ def delete_old_menu(chat_id):
     if chat_id in last_list_msg_id:
         delete_message_safe(chat_id, last_list_msg_id[chat_id])
 
-def get_keyboard(edit_mode=False):
-    markup = types.InlineKeyboardMarkup()
+def get_keyboard():
+    """Создает кнопки только для переключения статуса и входа в режим правки"""
     if not shopping_list:
-        if edit_mode:
-            markup.add(types.InlineKeyboardButton(text="➕ Добавить продукт", callback_data="add_from_edit"))
-            markup.add(types.InlineKeyboardButton(text="✅ Сохранить", callback_data="view_mode"))
-            return markup
         return None
-
-    for item, bought in shopping_list.items():
-        if edit_mode:
-            markup.add(types.InlineKeyboardButton(text=f"❌ Удалить: {item}", callback_data=f"del_{item}"))
-        else:
-            icon = "✅" if bought else "🛒"
-            markup.add(types.InlineKeyboardButton(text=f"{icon} {item}", callback_data=f"tgl_{item}"))
     
-    if edit_mode:
-        markup.add(types.InlineKeyboardButton(text="➕ Добавить продукт", callback_data="add_from_edit"))
-        markup.add(types.InlineKeyboardButton(text="🗑 Очистить всё", callback_data="clear_all"))
-        markup.add(types.InlineKeyboardButton(text="✅ Сохранить", callback_data="view_mode"))
-    else:
-        markup.add(types.InlineKeyboardButton(text="✍️ Редактировать", callback_data="edit_mode"))
+    markup = types.InlineKeyboardMarkup()
+    for item, bought in shopping_list.items():
+        icon = "✅" if bought else "🛒"
+        markup.add(types.InlineKeyboardButton(text=f"{icon} {item}", callback_data=f"tgl_{item}"))
+    
+    markup.add(types.InlineKeyboardButton(text="✍️ Редактировать текст списка", callback_data="edit_text_mode"))
     return markup
 
 @bot.message_handler(commands=['start'])
@@ -58,13 +47,13 @@ def show_list(message):
     if message.from_user.id not in ALLOWED_USERS: return
     delete_message_safe(message.chat.id, message.message_id)
     delete_old_menu(message.chat.id)
+    
     kb = get_keyboard()
-    msg_text = "Ваш список покупок:" if kb else "Список пока пуст."
-    if not kb:
-        kb = types.InlineKeyboardMarkup()
-        kb.add(types.InlineKeyboardButton(text="➕ Добавить продукт", callback_data="add_from_edit"))
-    sent_msg = bot.send_message(message.chat.id, msg_text, reply_markup=kb)
-    last_list_msg_id[message.chat.id] = sent_msg.message_id
+    if kb:
+        sent_msg = bot.send_message(message.chat.id, "Ваш список покупок:", reply_markup=kb)
+        last_list_msg_id[message.chat.id] = sent_msg.message_id
+    else:
+        bot.send_message(message.chat.id, "Список пуст. Нажми '➕ Добавить', чтобы внести продукты.")
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callbacks(call):
@@ -77,53 +66,23 @@ def handle_callbacks(call):
             shopping_list[item] = not shopping_list[item]
         bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=get_keyboard())
     
-    elif call.data == "edit_mode":
-        bot.edit_message_text("🛠 Режим редактирования:", call.message.chat.id, call.message.message_id, reply_markup=get_keyboard(edit_mode=True))
-                             
-    elif call.data == "view_mode":
-        bot.edit_message_text("Ваш список покупок:", call.message.chat.id, call.message.message_id, reply_markup=get_keyboard(edit_mode=False))
-
-    elif call.data == "add_from_edit":
-        # Важно: Сначала отвечаем на колбэк, потом вызываем функцию
+    elif call.data == "edit_text_mode":
+        # Формируем текст текущего списка для редактирования
+        text_list = "\n".join(shopping_list.keys())
+        bot.send_message(call.message.chat.id, "Скопируй, отредактируй и отправь мне обратно:")
+        bot.send_message(call.message.chat.id, f"```{text_list}```", parse_mode="Markdown")
         bot.answer_callback_query(call.id)
-        ask_add(call.message)
-
-    elif call.data.startswith("del_"):
-        item = call.data.replace("del_", "")
-        shopping_list.pop(item, None)
-        kb = get_keyboard(edit_mode=True)
-        if kb:
-            bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=kb)
-        else:
-            bot.edit_message_text("Список пуст.", call.message.chat.id, call.message.message_id, reply_markup=get_keyboard(edit_mode=True))
-
-    elif call.data == "clear_all":
-        shopping_list = {}
-        bot.edit_message_text("Список полностью очищен.", call.message.chat.id, call.message.message_id, reply_markup=get_keyboard(edit_mode=True))
-    
-    bot.answer_callback_query(call.id)
 
 @bot.message_handler(func=lambda m: m.text == "➕ Добавить")
 def ask_add(message):
     if message.from_user.id not in ALLOWED_USERS: return
-    # Если это текстовая кнопка "Добавить", удаляем её
-    if message.text == "➕ Добавить":
-        delete_message_safe(message.chat.id, message.message_id)
-    
-    # Удаляем старое меню, чтобы не дублировать
-    delete_old_menu(message.chat.id)
-    
-    msg = bot.send_message(message.chat.id, "Что добавить? (введите текст):")
-    last_ask_msg_id[message.chat.id] = msg.message_id
+    delete_message_safe(message.chat.id, message.message_id)
+    msg = bot.send_message(message.chat.id, "Что добавить? (через запятую или списком):")
     bot.register_next_step_handler(msg, process_adding)
 
 def process_adding(message):
-    # Удаляем то, что написал пользователь
     delete_message_safe(message.chat.id, message.message_id)
-    
-    # Удаляем вопрос бота
-    if message.chat.id in last_ask_msg_id:
-        delete_message_safe(message.chat.id, last_ask_msg_id[message.chat.id])
+    delete_old_menu(message.chat.id)
     
     if message.text:
         raw_text = message.text.replace('\n', ',')
@@ -132,9 +91,31 @@ def process_adding(message):
             if i not in shopping_list:
                 shopping_list[i] = False
     
-    # Показываем обновленный список
-    kb = get_keyboard()
-    sent_msg = bot.send_message(message.chat.id, "Список обновлен:", reply_markup=kb)
+    sent_msg = bot.send_message(message.chat.id, "Список обновлен:", reply_markup=get_keyboard())
+    last_list_msg_id[message.chat.id] = sent_msg.message_id
+
+# Дополнительный обработчик: если пользователь просто присылает текст, 
+# когда в списке уже что-то есть — считаем это полной заменой списка (редактированием)
+@bot.message_handler(func=lambda m: True)
+def handle_manual_edit(message):
+    global shopping_list
+    if message.from_user.id not in ALLOWED_USERS: return
+    
+    # Если в сообщении несколько строк или это явный ответ на редактирование
+    delete_message_safe(message.chat.id, message.message_id)
+    delete_old_menu(message.chat.id)
+
+    raw_text = message.text.replace('\n', ',')
+    new_items = [i.strip() for i in raw_text.split(',') if i.strip()]
+    
+    # Создаем новый список, сохраняя статусы "куплено" для тех, кто остался
+    new_list = {}
+    for item in new_items:
+        new_list[item] = shopping_list.get(item, False)
+    
+    shopping_list = new_list
+    
+    sent_msg = bot.send_message(message.chat.id, "Список обновлен (режим правки):", reply_markup=get_keyboard())
     last_list_msg_id[message.chat.id] = sent_msg.message_id
 
 if __name__ == "__main__":
